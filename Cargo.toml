@@ -1,0 +1,17 @@
+[package]
+name = "tiddly-wiki-server"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+axum = "0"
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"]}
+tower-http = {version = "0.3", default-features = false, features=["fs"]}
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = {version = "0.3", features = ["env-filter", "fmt"]}
+serde = {version = "1", features = ["derive"]}
+regex = "1.5"
+serde_json = "1"
