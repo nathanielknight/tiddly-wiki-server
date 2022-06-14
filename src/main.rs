@@ -3,7 +3,7 @@ use axum::{
     error_handling::HandleError,
     extract,
     http::StatusCode,
-    routing::{get, put, on_service, MethodFilter},
+    routing::{get, put, delete, on_service, MethodFilter},
     Extension, Router,
 };
 use serde::Serialize;
@@ -12,12 +12,15 @@ use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
+use tracing;
 use tower_http::services::fs::ServeFile;
 
 type DataStore = Arc<Mutex<Tiddlers>>;
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt::init();
+
     let addr = SocketAddr::from(([127, 0, 0, 1], 3032));
     println!("listening on {}", addr);
 
@@ -28,7 +31,10 @@ async fn main() {
         .route("/", on_service(MethodFilter::GET, static_wiki))
         .route("/status", get(status))
         .route("/recipes/default/tiddlers.json", get(all_tiddlers))
-        .route("/recipes/default/tiddlers/:title", put(put_tiddler))
+        .route("/recipes/default/tiddlers/:title", put(put_tiddler).get(get_tiddler))
+        // NOTE(nknight): For some reason both the 'default' and 'efault' versions of this URL get hit.
+        .route("/bags/default/tiddlers/:title", delete(delete_tiddler))
+        .route("/bags/efault/tiddlers/:title", delete(delete_tiddler))
         .layer(Extension(tiddlers));
 
     axum::Server::bind(&addr)
@@ -44,6 +50,35 @@ async fn all_tiddlers(Extension(ds): Extension<DataStore>) -> axum::Json<Vec<ser
     let tiddlers = &mut *lock;
     let all: Vec<serde_json::Value> = tiddlers.all().iter().map(|t| t.as_value()).collect();
     axum::Json(all)
+}
+
+async fn get_tiddler(
+    Extension(ds): Extension<DataStore>,
+    extract::Path(title): extract::Path<String>
+) -> Result<axum::Json<Tiddler>, axum::response::Response> {
+    let mut lock = ds.lock().expect("failed to lock tiddlers");
+    let tiddlers = &mut *lock;
+
+    if let Some(t) = tiddlers.get(&title) {
+        Ok(axum::Json(t))
+    } else {
+        let mut resp = axum::response::Response::default();
+        *resp.status_mut() = StatusCode::NOT_FOUND;
+        Err(resp)
+    }
+}
+
+async fn delete_tiddler(
+    Extension(ds): Extension<DataStore>,
+    extract::Path(title): extract::Path<String>
+) -> axum::response::Response<String> {
+    let mut lock = ds.lock().expect("failed to lock tiddlers");
+    let tiddlers = &mut *lock;
+    tiddlers.pop(&title);
+
+    let mut resp = axum::response::Response::default();
+    *resp.status_mut() = StatusCode::NO_CONTENT;
+    resp
 }
 
 async fn put_tiddler(
@@ -65,7 +100,7 @@ async fn put_tiddler(
     tiddlers.put(new_tiddler);
     Response::builder()
         .status(StatusCode::NO_CONTENT)
-        .header("Etag", format!("default/{}/{}", title, new_revision))
+        .header("Etag", format!("default/{}/{}:", title, new_revision))
         .body(String::new())
         .or_else(|e| Err(format!("Error building response: {}", e)))
 }
@@ -88,17 +123,24 @@ impl Tiddlers {
         }
     }
 
+    pub(crate) fn get(&self, title: &str) -> Option<Tiddler> {
+        tracing::debug!("getting tiddler: {}", title);
+        self.tiddlers.get(title).map(|t| t.clone())
+    }
+
     pub(crate) fn put(&mut self, tiddler: Tiddler) {
+        tracing::debug!("putting tiddler: {}", tiddler.title);
         let title = tiddler.title.clone();
         self.tiddlers.insert(title, tiddler);
     }
 
     pub(crate) fn pop(&mut self, title: &str) -> Option<Tiddler> {
+        tracing::debug!("popping tiddler: {}", title);
         self.tiddlers.remove(title).map(|t| t.clone())
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub(crate) struct Tiddler {
     title: String,
     revision: u64,
