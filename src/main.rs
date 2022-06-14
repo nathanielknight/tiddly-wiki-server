@@ -1,30 +1,34 @@
+use anyhow;
 use axum::{
     error_handling::HandleError,
+    extract,
     http::StatusCode,
-    response::Html,
-    routing::{get, on_service, MethodFilter},
-    Router,
-    Extension,
+    routing::{get, put, on_service, MethodFilter},
+    Extension, Router,
 };
 use serde::Serialize;
+use serde_json::{Number, Value};
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
 use tower_http::services::fs::ServeFile;
 
+type DataStore = Arc<Mutex<Tiddlers>>;
+
 #[tokio::main]
 async fn main() {
     let addr = SocketAddr::from(([127, 0, 0, 1], 3032));
     println!("listening on {}", addr);
 
-    let tiddlers = Arc::new(Mutex::new(tiddler::Tiddlers::new()));
+    let tiddlers = Arc::new(Mutex::new(Tiddlers::new()));
     let static_wiki = HandleError::new(ServeFile::new("./tiddlywiki.html"), handle_io_error);
 
     let app = Router::new()
         .route("/", on_service(MethodFilter::GET, static_wiki))
         .route("/status", get(status))
         .route("/recipes/default/tiddlers.json", get(all_tiddlers))
+        .route("/recipes/default/tiddlers/:title", put(put_tiddler))
         .layer(Extension(tiddlers));
 
     axum::Server::bind(&addr)
@@ -33,9 +37,109 @@ async fn main() {
         .unwrap();
 }
 
-async fn home() -> Html<&'static str> {
-    Html("<h1>Hello, Tiddlywiki!</h1>")
+// -----------------------------------------------------------------------------------
+// Views
+async fn all_tiddlers(Extension(ds): Extension<DataStore>) -> axum::Json<Vec<serde_json::Value>> {
+    let mut lock = ds.lock().expect("failed to lock tiddlers");
+    let tiddlers = &mut *lock;
+    let all: Vec<serde_json::Value> = tiddlers.all().iter().map(|t| t.as_value()).collect();
+    axum::Json(all)
 }
+
+async fn put_tiddler(
+    Extension(ds): Extension<DataStore>,
+    extract::Json(v): extract::Json<serde_json::Value>,
+    extract::Path(title): extract::Path<String>,
+) -> Result<axum::http::Response<String>, String> {
+    use axum::http::response::Response;
+    let mut new_tiddler = Tiddler::from_value(v)
+        .or_else(|e| Err(format!("Error converting tiddler: {}", e)))?;
+    
+    let mut lock = ds.lock().expect("failed to lock tiddlers");
+    let tiddlers = &mut *lock;
+
+    if let Some(_old_tiddler) = tiddlers.pop(&title) {
+        new_tiddler.revision += 1;
+    }
+    let new_revision = new_tiddler.revision;
+    tiddlers.put(new_tiddler);
+    Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .header("Etag", format!("default/{}/{}", title, new_revision))
+        .body(String::new())
+        .or_else(|e| Err(format!("Error building response: {}", e)))
+}
+
+// -----------------------------------------------------------------------------------
+// Models and serialization/parsing
+
+pub(crate) struct Tiddlers {
+    tiddlers: std::collections::HashMap<String, Tiddler>,
+}
+
+impl Tiddlers {
+    pub(crate) fn all(&self) -> Vec<Tiddler> {
+        self.tiddlers.values().map(|t| t.clone()).collect()
+    }
+
+    pub(crate) fn new() -> Self {
+        Tiddlers {
+            tiddlers: std::collections::HashMap::new(),
+        }
+    }
+
+    pub(crate) fn put(&mut self, tiddler: Tiddler) {
+        let title = tiddler.title.clone();
+        self.tiddlers.insert(title, tiddler);
+    }
+
+    pub(crate) fn pop(&mut self, title: &str) -> Option<Tiddler> {
+        self.tiddlers.remove(title).map(|t| t.clone())
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct Tiddler {
+    title: String,
+    revision: u64,
+    meta: serde_json::Value,
+}
+
+impl Tiddler {
+    pub(crate) fn as_value(&self) -> Value {
+        let mut meta = self.meta.clone();
+        meta["title"] = Value::String(self.title.clone());
+        meta["revision"] = Value::Number(Number::from(self.revision));
+        meta
+    }
+
+    pub(crate) fn from_value(value: Value) -> anyhow::Result<Tiddler> {
+        let obj = match value.clone() {
+            Value::Object(m) => m,
+            _ => anyhow::bail!("from_value expects a JSON Object"),
+        };
+        let title = match obj.get("title") {
+            Some(Value::String(s)) => s,
+            _ => anyhow::bail!("tiddler['title'] should be a string"),
+        };
+        let revision = match obj.get("revision") {
+            Some(Value::Number(n)) => n
+                .as_u64()
+                .ok_or(anyhow::anyhow!("revision should be a u64 (not {})", n))?,
+            None => 0,
+            _ => anyhow::bail!("tiddler['revision'] should be a number"),
+        };
+        let tiddler = Tiddler {
+            title: title.clone(),
+            revision: revision,
+            meta: value,
+        };
+        Ok(tiddler)
+    }
+}
+
+// -----------------------------------------------------------------------------------
+// Utility functions
 
 async fn handle_io_error(err: std::io::Error) -> (StatusCode, String) {
     (
@@ -43,6 +147,9 @@ async fn handle_io_error(err: std::io::Error) -> (StatusCode, String) {
         format!("Internal Server Error: {}", err),
     )
 }
+
+// -----------------------------------------------------------------------------------
+// Static Status
 
 #[derive(Serialize)]
 struct Status {
@@ -68,50 +175,4 @@ const STATUS: Status = Status {
 
 async fn status() -> axum::Json<Status> {
     axum::Json(STATUS)
-}
-
-type DataStore = Arc<Mutex<tiddler::Tiddlers>>;
-
-async fn all_tiddlers(Extension(ds): Extension<DataStore>) -> axum::Json<Vec<serde_json::Value>> {
-    let mut lock = ds.lock().expect("failed to lock tiddlers");
-    let tiddlers = &mut *lock;
-    let all: Vec<serde_json::Value> = tiddlers.all().iter().map(|t| t.as_value()).collect();
-    axum::Json(all)
-}
-
-mod tiddler {
-    use serde_json::{Number, Value};
-
-    pub(crate) struct Tiddlers {
-        tiddlers: std::collections::HashMap<String, Tiddler>,
-    }
-
-    impl Tiddlers {
-        pub(crate) fn all(&self) -> Vec<Tiddler> {
-            self.tiddlers.values().map(|t| t.clone()).collect()
-        }
-
-        pub(crate) fn new() -> Self {
-            Tiddlers {
-                tiddlers: std::collections::HashMap::new(),
-            }
-        }
-    }
-
-    #[derive(Clone)]
-    pub(crate) struct Tiddler {
-        title: String,
-        text: String,
-        revision: u64,
-        meta: serde_json::Value,
-    }
-
-    impl Tiddler {
-        pub(crate) fn as_value(&self) -> Value {
-            let mut meta = self.meta.clone();
-            meta["title"] = Value::String(self.title.clone());
-            meta["text"] = Value::String(self.text.clone());
-            meta["revision"] = Value::Number(Number::from(self.revision));
-            meta
-        }
 }
