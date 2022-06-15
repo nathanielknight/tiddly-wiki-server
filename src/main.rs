@@ -60,7 +60,7 @@ async fn get_tiddler(
     let tiddlers = &mut *lock;
 
     if let Some(t) = tiddlers.get(&title) {
-        Ok(axum::Json(t))
+        Ok(axum::Json(t.as_value()))
     } else {
         let mut resp = axum::response::Response::default();
         *resp.status_mut() = StatusCode::NOT_FOUND;
