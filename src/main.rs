@@ -1,9 +1,8 @@
-use anyhow;
 use axum::{
     error_handling::HandleError,
     extract,
     http::StatusCode,
-    routing::{get, put, delete, on_service, MethodFilter},
+    routing::{delete, get, on_service, put, MethodFilter},
     Extension, Router,
 };
 use serde::Serialize;
@@ -12,7 +11,6 @@ use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
-use tracing;
 use tower_http::services::fs::ServeFile;
 
 type DataStore = Arc<Mutex<Tiddlers>>;
@@ -31,7 +29,10 @@ async fn main() {
         .route("/", on_service(MethodFilter::GET, static_wiki))
         .route("/status", get(status))
         .route("/recipes/default/tiddlers.json", get(all_tiddlers))
-        .route("/recipes/default/tiddlers/:title", put(put_tiddler).get(get_tiddler))
+        .route(
+            "/recipes/default/tiddlers/:title",
+            put(put_tiddler).get(get_tiddler),
+        )
         // NOTE(nknight): For some reason both the 'default' and 'efault' versions of this URL get hit.
         .route("/bags/default/tiddlers/:title", delete(delete_tiddler))
         .route("/bags/efault/tiddlers/:title", delete(delete_tiddler))
@@ -54,8 +55,8 @@ async fn all_tiddlers(Extension(ds): Extension<DataStore>) -> axum::Json<Vec<ser
 
 async fn get_tiddler(
     Extension(ds): Extension<DataStore>,
-    extract::Path(title): extract::Path<String>
-) -> Result<axum::Json<Tiddler>, axum::response::Response> {
+    extract::Path(title): extract::Path<String>,
+) -> Result<axum::Json<serde_json::Value>, axum::response::Response> {
     let mut lock = ds.lock().expect("failed to lock tiddlers");
     let tiddlers = &mut *lock;
 
@@ -70,7 +71,7 @@ async fn get_tiddler(
 
 async fn delete_tiddler(
     Extension(ds): Extension<DataStore>,
-    extract::Path(title): extract::Path<String>
+    extract::Path(title): extract::Path<String>,
 ) -> axum::response::Response<String> {
     let mut lock = ds.lock().expect("failed to lock tiddlers");
     let tiddlers = &mut *lock;
@@ -87,9 +88,8 @@ async fn put_tiddler(
     extract::Path(title): extract::Path<String>,
 ) -> Result<axum::http::Response<String>, String> {
     use axum::http::response::Response;
-    let mut new_tiddler = Tiddler::from_value(v)
-        .or_else(|e| Err(format!("Error converting tiddler: {}", e)))?;
-    
+    let mut new_tiddler =
+        Tiddler::from_value(v).map_err(|e| format!("Error converting tiddler: {}", e))?;
     let mut lock = ds.lock().expect("failed to lock tiddlers");
     let tiddlers = &mut *lock;
 
@@ -102,7 +102,7 @@ async fn put_tiddler(
         .status(StatusCode::NO_CONTENT)
         .header("Etag", format!("default/{}/{}:", title, new_revision))
         .body(String::new())
-        .or_else(|e| Err(format!("Error building response: {}", e)))
+        .map_err(|e| format!("Error building response: {}", e))
 }
 
 // -----------------------------------------------------------------------------------
@@ -114,7 +114,7 @@ pub(crate) struct Tiddlers {
 
 impl Tiddlers {
     pub(crate) fn all(&self) -> Vec<Tiddler> {
-        self.tiddlers.values().map(|t| t.clone()).collect()
+        self.tiddlers.values().cloned().collect()
     }
 
     pub(crate) fn new() -> Self {
@@ -125,7 +125,7 @@ impl Tiddlers {
 
     pub(crate) fn get(&self, title: &str) -> Option<Tiddler> {
         tracing::debug!("getting tiddler: {}", title);
-        self.tiddlers.get(title).map(|t| t.clone())
+        self.tiddlers.get(title).cloned()
     }
 
     pub(crate) fn put(&mut self, tiddler: Tiddler) {
@@ -136,7 +136,7 @@ impl Tiddlers {
 
     pub(crate) fn pop(&mut self, title: &str) -> Option<Tiddler> {
         tracing::debug!("popping tiddler: {}", title);
-        self.tiddlers.remove(title).map(|t| t.clone())
+        self.tiddlers.remove(title)
     }
 }
 
@@ -167,13 +167,16 @@ impl Tiddler {
         let revision = match obj.get("revision") {
             Some(Value::Number(n)) => n
                 .as_u64()
-                .ok_or(anyhow::anyhow!("revision should be a u64 (not {})", n))?,
+                .ok_or_else(|| anyhow::anyhow!("revision should be a u64 (not {})", n))?,
+            Some(Value::String(s)) => s
+                .parse::<u64>()
+                .map_err(|_| anyhow::anyhow!("couldn't parse a revision number from '{}'", s))?,
             None => 0,
             _ => anyhow::bail!("tiddler['revision'] should be a number"),
         };
         let tiddler = Tiddler {
             title: title.clone(),
-            revision: revision,
+            revision,
             meta: value,
         };
         Ok(tiddler)
