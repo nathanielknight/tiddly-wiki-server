@@ -1,3 +1,7 @@
+// NOTE(nknight): This is the API I'm trying to conform to: https://tiddlywiki.com/#WebServer%20API
+// TODO: serve static files: https://tiddlywiki.com/#WebServer%20API%3A%20Get%20File
+// TODO: render main wiki
+
 use axum::{
     error_handling::HandleError,
     extract,
@@ -22,7 +26,7 @@ async fn main() {
     let addr = SocketAddr::from(([127, 0, 0, 1], 3032));
     println!("listening on {}", addr);
 
-    let tiddlers = Arc::new(Mutex::new(Tiddlers::new()));
+    let datastore = initialize_datastore().expect("Error initializing datastore");
     let static_wiki = HandleError::new(ServeFile::new("./tiddlywiki.html"), handle_io_error);
 
     let app = Router::new()
@@ -36,107 +40,170 @@ async fn main() {
         // NOTE(nknight): For some reason both the 'default' and 'efault' versions of this URL get hit.
         .route("/bags/default/tiddlers/:title", delete(delete_tiddler))
         .route("/bags/efault/tiddlers/:title", delete(delete_tiddler))
-        .layer(Extension(tiddlers));
+        .layer(Extension(datastore));
 
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await
-        .unwrap();
+        .expect("Error running server");
+}
+
+fn initialize_datastore() -> AppResult<DataStore> {
+    let init_script = include_str!("./init.sql");
+    let cxn = rusqlite::Connection::open("./tiddlers.sqlite3").map_err(AppError::from)?;
+    cxn.execute_batch(init_script).map_err(AppError::from)?;
+    let tiddlers = Tiddlers { cxn };
+    Ok(Arc::new(Mutex::new(tiddlers)))
 }
 
 // -----------------------------------------------------------------------------------
 // Views
-async fn all_tiddlers(Extension(ds): Extension<DataStore>) -> axum::Json<Vec<serde_json::Value>> {
+#[axum_macros::debug_handler]
+async fn all_tiddlers(
+    Extension(ds): Extension<DataStore>,
+) -> AppResult<axum::Json<Vec<serde_json::Value>>> {
     let mut lock = ds.lock().expect("failed to lock tiddlers");
     let tiddlers = &mut *lock;
-    let all: Vec<serde_json::Value> = tiddlers.all().iter().map(|t| t.as_value()).collect();
-    axum::Json(all)
+    let all: Vec<serde_json::Value> = tiddlers.all()?.iter().map(|t| t.as_value()).collect();
+    Ok(axum::Json(all))
 }
 
+#[axum_macros::debug_handler]
 async fn get_tiddler(
     Extension(ds): Extension<DataStore>,
     extract::Path(title): extract::Path<String>,
-) -> Result<axum::Json<serde_json::Value>, axum::response::Response> {
+) -> AppResult<axum::http::Response<String>> {
+    use serde_json::ser::to_string_pretty;
+
     let mut lock = ds.lock().expect("failed to lock tiddlers");
     let tiddlers = &mut *lock;
 
-    if let Some(t) = tiddlers.get(&title) {
-        Ok(axum::Json(t.as_value()))
+    if let Some(t) = tiddlers.get(&title)? {
+        let body = to_string_pretty(&t.as_value())
+            .map_err(|e| AppError::Serialization(format!("error serializing tiddler: {}", e)))?;
+        axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(body)
+            .map_err(|e| AppError::Response(format!("error building response: {}", e)))
     } else {
-        let mut resp = axum::response::Response::default();
-        *resp.status_mut() = StatusCode::NOT_FOUND;
-        Err(resp)
+        let body = String::new();
+        axum::response::Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(body)
+            .map_err(|e| AppError::Response(format!("error building 404 response: {}", e)))
     }
 }
 
 async fn delete_tiddler(
     Extension(ds): Extension<DataStore>,
     extract::Path(title): extract::Path<String>,
-) -> axum::response::Response<String> {
+) -> AppResult<axum::response::Response<String>> {
     let mut lock = ds.lock().expect("failed to lock tiddlers");
     let tiddlers = &mut *lock;
-    tiddlers.pop(&title);
+    tiddlers.pop(&title)?;
 
     let mut resp = axum::response::Response::default();
     *resp.status_mut() = StatusCode::NO_CONTENT;
-    resp
+    Ok(resp)
 }
 
 async fn put_tiddler(
     Extension(ds): Extension<DataStore>,
     extract::Json(v): extract::Json<serde_json::Value>,
     extract::Path(title): extract::Path<String>,
-) -> Result<axum::http::Response<String>, String> {
+) -> AppResult<axum::http::Response<String>> {
     use axum::http::response::Response;
-    let mut new_tiddler =
-        Tiddler::from_value(v).map_err(|e| format!("Error converting tiddler: {}", e))?;
+    let mut new_tiddler = Tiddler::from_value(v)?;
     let mut lock = ds.lock().expect("failed to lock tiddlers");
     let tiddlers = &mut *lock;
 
-    if let Some(_old_tiddler) = tiddlers.pop(&title) {
+    if let Some(_old_tiddler) = tiddlers.pop(&title)? {
         new_tiddler.revision += 1;
     }
     let new_revision = new_tiddler.revision;
-    tiddlers.put(new_tiddler);
+    tiddlers.put(new_tiddler)?;
     Response::builder()
         .status(StatusCode::NO_CONTENT)
         .header("Etag", format!("default/{}/{}:", title, new_revision))
         .body(String::new())
-        .map_err(|e| format!("Error building response: {}", e))
+        .map_err(|e| AppError::Response(format!("Error building response: {}", e)))
 }
 
 // -----------------------------------------------------------------------------------
 // Models and serialization/parsing
 
 pub(crate) struct Tiddlers {
-    tiddlers: std::collections::HashMap<String, Tiddler>,
+    cxn: rusqlite::Connection,
 }
 
 impl Tiddlers {
-    pub(crate) fn all(&self) -> Vec<Tiddler> {
-        self.tiddlers.values().cloned().collect()
-    }
-
-    pub(crate) fn new() -> Self {
-        Tiddlers {
-            tiddlers: std::collections::HashMap::new(),
+    pub(crate) fn all(&self) -> AppResult<Vec<Tiddler>> {
+        tracing::debug!("Retrieving all tiddlers");
+        const GET: &str = r#"
+            SELECT title, revision, meta FROM tiddlers
+        "#;
+        let mut stmt = self.cxn.prepare_cached(GET).map_err(AppError::from)?;
+        let raw_tiddlers = stmt
+            .query_map([], |r| r.get::<usize, serde_json::Value>(2))
+            .map_err(AppError::from)?;
+        let mut tiddlers = Vec::new();
+        for qt in raw_tiddlers {
+            let raw = qt.map_err(AppError::from)?;
+            let tiddler = Tiddler::from_value(raw)?;
+            tiddlers.push(tiddler);
         }
+        Ok(tiddlers)
     }
 
-    pub(crate) fn get(&self, title: &str) -> Option<Tiddler> {
+    pub(crate) fn get(&self, title: &str) -> AppResult<Option<Tiddler>> {
+        use rusqlite::OptionalExtension;
+
         tracing::debug!("getting tiddler: {}", title);
-        self.tiddlers.get(title).cloned()
+
+        const GET: &str = r#"
+            SELECT title, revision, meta FROM tiddlers
+            WHERE title = ?
+        "#;
+        let raw = self
+            .cxn
+            .query_row(GET, [title], |r| r.get::<usize, serde_json::Value>(2))
+            .optional()
+            .map_err(|e| AppError::Database(format!("Error retrieving '{}': {}", title, e)))?;
+        raw.map(Tiddler::from_value).transpose()
     }
 
-    pub(crate) fn put(&mut self, tiddler: Tiddler) {
+    pub(crate) fn put(&mut self, tiddler: Tiddler) -> AppResult<()> {
         tracing::debug!("putting tiddler: {}", tiddler.title);
-        let title = tiddler.title.clone();
-        self.tiddlers.insert(title, tiddler);
+        const PUT: &str = r#"
+            INSERT INTO tiddlers (title, revision, meta) VALUES (:title, :revision, :meta)
+            ON CONFLICT (title) DO UPDATE
+            SET title = :title, revision = :revision, meta = :meta
+        "#;
+        let mut stmt = self
+            .cxn
+            .prepare_cached(PUT)
+            .map_err(|e| AppError::Database(format!("Error preparing statement: {}", e)))?;
+        stmt.execute(rusqlite::named_params! {
+            ":title": tiddler.title,
+            ":revision": tiddler.revision,
+            ":meta": tiddler.meta,
+        })?;
+        tracing::debug!("done");
+        Ok(())
     }
 
-    pub(crate) fn pop(&mut self, title: &str) -> Option<Tiddler> {
+    pub(crate) fn pop(&mut self, title: &str) -> AppResult<Option<Tiddler>> {
         tracing::debug!("popping tiddler: {}", title);
-        self.tiddlers.remove(title)
+        let result = self.get(title)?;
+        const DELETE: &str = "DELETE FROM tiddlers WHERE title = :title";
+        let mut stmt = self
+            .cxn
+            .prepare(DELETE)
+            .map_err(|e| AppError::Database(format!("Error preparing {}: {}", DELETE, e)))?;
+        stmt.execute(rusqlite::named_params! { ":title": title })
+            .map_err(|e| AppError::Database(format!("Error removing tiddler: {}", e)))?;
+        Ok(result)
     }
 }
 
@@ -155,24 +222,36 @@ impl Tiddler {
         meta
     }
 
-    pub(crate) fn from_value(value: Value) -> anyhow::Result<Tiddler> {
+    pub(crate) fn from_value(value: Value) -> AppResult<Tiddler> {
         let obj = match value.clone() {
             Value::Object(m) => m,
-            _ => anyhow::bail!("from_value expects a JSON Object"),
+            _ => {
+                return Err(AppError::Serialization(
+                    "from_value expects a JSON Object".to_string(),
+                ))
+            }
         };
         let title = match obj.get("title") {
             Some(Value::String(s)) => s,
-            _ => anyhow::bail!("tiddler['title'] should be a string"),
+            _ => {
+                return Err(AppError::Serialization(
+                    "tiddler['title'] should be a string".to_string(),
+                ))
+            }
         };
         let revision = match obj.get("revision") {
-            Some(Value::Number(n)) => n
-                .as_u64()
-                .ok_or_else(|| anyhow::anyhow!("revision should be a u64 (not {})", n))?,
-            Some(Value::String(s)) => s
-                .parse::<u64>()
-                .map_err(|_| anyhow::anyhow!("couldn't parse a revision number from '{}'", s))?,
             None => 0,
-            _ => anyhow::bail!("tiddler['revision'] should be a number"),
+            Some(Value::Number(n)) => n.as_u64().ok_or_else(|| {
+                AppError::Serialization(format!("revision should be a u64 (not {})", n))
+            })?,
+            Some(Value::String(s)) => s.parse::<u64>().map_err(|_| {
+                AppError::Serialization(format!("couldn't parse a revision number from '{}'", s))
+            })?,
+            _ => {
+                return Err(AppError::Serialization(
+                    "tiddler['revision'] should be a number".to_string(),
+                ))
+            }
         };
         let tiddler = Tiddler {
             title: title.clone(),
@@ -220,4 +299,36 @@ const STATUS: Status = Status {
 
 async fn status() -> axum::Json<Status> {
     axum::Json(STATUS)
+}
+
+// -----------------------------------------------------------------------------------
+// Error handling
+
+type AppResult<T> = Result<T, AppError>;
+
+#[derive(Debug)]
+enum AppError {
+    Database(String),
+    Response(String),
+    Serialization(String),
+}
+
+impl axum::response::IntoResponse for AppError {
+    fn into_response(self) -> axum::response::Response {
+        tracing::error!("{:?}", self);
+        let msg = match self {
+            AppError::Database(msg) => msg,
+            AppError::Response(msg) => msg,
+            AppError::Serialization(msg) => msg,
+        };
+        (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+    }
+}
+
+impl From<rusqlite::Error> for AppError {
+    fn from(err: rusqlite::Error) -> AppError {
+        tracing::error!("{:?}", err);
+        let msg = err.to_string();
+        AppError::Database(msg)
+    }
 }
