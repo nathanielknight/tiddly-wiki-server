@@ -18,6 +18,7 @@ use std::{
 use tower_http::services::fs::ServeFile;
 
 type DataStore = Arc<Mutex<Tiddlers>>;
+type Template<'t> = Arc<Mutex<ramhorns::Template<'t>>>;
 
 #[tokio::main]
 async fn main() {
@@ -27,10 +28,21 @@ async fn main() {
     println!("listening on {}", addr);
 
     let datastore = initialize_datastore().expect("Error initializing datastore");
-    let static_wiki = HandleError::new(ServeFile::new("./tiddlywiki.html"), handle_io_error);
+    // let template = {
+    //     use std::io::Read;
+    //     let mut buffer = String::new();
+    //     let mut templatefile = std::fs::File::open("./tiddlywiki.html.mustache")
+    //         .expect("Couldn't open tiddlywiki template");
+    //     templatefile
+    //         .read_to_string(&mut buffer)
+    //         .expect("Couldn't read tiddlywiki template");
+    //     let template = ramhorns::Template::new(buffer).expect("Failed to parse template");
+    //     Arc::new(Mutex::new(template))
+    // };
+    // let static_wiki = HandleError::new(ServeFile::new("./empty.html"), handle_io_error);
 
     let app = Router::new()
-        .route("/", on_service(MethodFilter::GET, static_wiki))
+        .route("/", get(render_wiki))
         .route("/status", get(status))
         .route("/recipes/default/tiddlers.json", get(all_tiddlers))
         .route(
@@ -58,7 +70,40 @@ fn initialize_datastore() -> AppResult<DataStore> {
 
 // -----------------------------------------------------------------------------------
 // Views
+
 #[axum_macros::debug_handler]
+async fn render_wiki(
+    Extension(ds): Extension<DataStore>,
+) -> AppResult<axum::response::Html<String>> {
+    // TODO: Stream the response body with https://docs.rs/axum/latest/axum/body/struct.StreamBody.html
+
+    let mut ds_lock = ds.lock().expect("failed to lock tiddlers");
+    let datastore = &mut *ds_lock;
+    // let mut template_lock = shared_template.lock().expect("failed to lock tiddlers");
+    // let template = &mut *template_lock;
+
+    const TARGET_STR: &str = "@@TIDDLY-WIKI-SERVER-EXTRA-TIDDLERS-@@N41yzvgnloEcoiY0so8e2dlri4cbYopzw7D5K4XRO9I@@";
+
+    let template = {
+        use std::io::Read;
+        let mut buffer = String::new();
+        let mut templatefile = std::fs::File::open("./empty.html.template")
+            .expect("Couldn't open tiddlywiki template");
+        templatefile
+            .read_to_string(&mut buffer)
+            .expect("Couldn't read tiddlywiki template");
+        buffer
+    };
+
+    let tiddlers: Vec<Tiddler>= datastore.all()?;
+    let json_tiddlers = serde_json::to_string(&tiddlers)
+        .map_err(|e| AppError::Serialization(format!("error serializing tiddlers: {}", e)))?;
+
+    let body = template.replace(TARGET_STR, &json_tiddlers);
+
+    Ok(axum::response::Html(body))
+}
+
 async fn all_tiddlers(
     Extension(ds): Extension<DataStore>,
 ) -> AppResult<axum::Json<Vec<serde_json::Value>>> {
@@ -68,7 +113,6 @@ async fn all_tiddlers(
     Ok(axum::Json(all))
 }
 
-#[axum_macros::debug_handler]
 async fn get_tiddler(
     Extension(ds): Extension<DataStore>,
     extract::Path(title): extract::Path<String>,
@@ -218,7 +262,10 @@ impl Tiddler {
     pub(crate) fn as_value(&self) -> Value {
         let mut meta = self.meta.clone();
         meta["title"] = Value::String(self.title.clone());
-        meta["revision"] = Value::Number(Number::from(self.revision));
+
+        // NOTE(nknight): TiddlyWiki expects revisions to be strings instead of
+        // numbers.
+        meta["revision"] = Value::String(self.revision.to_string());
         meta
     }
 
