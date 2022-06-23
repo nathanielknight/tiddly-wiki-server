@@ -1,24 +1,22 @@
 // NOTE(nknight): This is the API I'm trying to conform to: https://tiddlywiki.com/#WebServer%20API
 // TODO: serve static files: https://tiddlywiki.com/#WebServer%20API%3A%20Get%20File
-// TODO: render main wiki
+// TODO: take host & port as arguments
+// TODO: document
 
 use axum::{
-    error_handling::HandleError,
     extract,
     http::StatusCode,
-    routing::{delete, get, on_service, put, MethodFilter},
+    routing::{delete, get, put},
     Extension, Router,
 };
 use serde::Serialize;
-use serde_json::{Number, Value};
+use serde_json::Value;
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
-use tower_http::services::fs::ServeFile;
 
 type DataStore = Arc<Mutex<Tiddlers>>;
-type Template<'t> = Arc<Mutex<ramhorns::Template<'t>>>;
 
 #[tokio::main]
 async fn main() {
@@ -28,18 +26,6 @@ async fn main() {
     println!("listening on {}", addr);
 
     let datastore = initialize_datastore().expect("Error initializing datastore");
-    // let template = {
-    //     use std::io::Read;
-    //     let mut buffer = String::new();
-    //     let mut templatefile = std::fs::File::open("./tiddlywiki.html.mustache")
-    //         .expect("Couldn't open tiddlywiki template");
-    //     templatefile
-    //         .read_to_string(&mut buffer)
-    //         .expect("Couldn't read tiddlywiki template");
-    //     let template = ramhorns::Template::new(buffer).expect("Failed to parse template");
-    //     Arc::new(Mutex::new(template))
-    // };
-    // let static_wiki = HandleError::new(ServeFile::new("./empty.html"), handle_io_error);
 
     let app = Router::new()
         .route("/", get(render_wiki))
@@ -71,7 +57,6 @@ fn initialize_datastore() -> AppResult<DataStore> {
 // -----------------------------------------------------------------------------------
 // Views
 
-#[axum_macros::debug_handler]
 async fn render_wiki(
     Extension(ds): Extension<DataStore>,
 ) -> AppResult<axum::response::Html<String>> {
@@ -82,7 +67,8 @@ async fn render_wiki(
     // let mut template_lock = shared_template.lock().expect("failed to lock tiddlers");
     // let template = &mut *template_lock;
 
-    const TARGET_STR: &str = "@@TIDDLY-WIKI-SERVER-EXTRA-TIDDLERS-@@N41yzvgnloEcoiY0so8e2dlri4cbYopzw7D5K4XRO9I@@";
+    const TARGET_STR: &str =
+        "@@TIDDLY-WIKI-SERVER-EXTRA-TIDDLERS-@@N41yzvgnloEcoiY0so8e2dlri4cbYopzw7D5K4XRO9I@@";
 
     let template = {
         use std::io::Read;
@@ -95,7 +81,7 @@ async fn render_wiki(
         buffer
     };
 
-    let tiddlers: Vec<Tiddler>= datastore.all()?;
+    let tiddlers: Vec<Tiddler> = datastore.all()?;
     let json_tiddlers = serde_json::to_string(&tiddlers)
         .map_err(|e| AppError::Serialization(format!("error serializing tiddlers: {}", e)))?;
 
@@ -307,16 +293,6 @@ impl Tiddler {
         };
         Ok(tiddler)
     }
-}
-
-// -----------------------------------------------------------------------------------
-// Utility functions
-
-async fn handle_io_error(err: std::io::Error) -> (StatusCode, String) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        format!("Internal Server Error: {}", err),
-    )
 }
 
 // -----------------------------------------------------------------------------------
