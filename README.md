@@ -1,5 +1,7 @@
 # Tiddlywiki Server
 
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](code_of_conduct.md) 
+
 This is a web backend for [TiddlyWiki]. It uses TiddlyWiki's [web server
 API] to save tiddlers in a [SQLite database]. It should come  with a
 slightly altered empty TiddlyWiki that includes an extra tiddler store (for
@@ -43,3 +45,8 @@ The most valuable way to contribute to this project is currently testing: try to
 setup a Tiddlywiki with it and see if it behaves the way you'd expect. The
 server aims to have feature parity with the first-party NodeJS backend; any
 discrepancy is a potential bug, which I'd be very grateful to have reported!
+
+
+## Code of Conduct
+
+Contributors are expected to abide by the [Contributor Covenant](https://www.contributor-covenant.org/).
