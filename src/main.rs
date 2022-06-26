@@ -118,7 +118,7 @@ async fn all_tiddlers(
 ) -> AppResult<axum::Json<Vec<serde_json::Value>>> {
     let mut lock = ds.lock().expect("failed to lock tiddlers");
     let tiddlers = &mut *lock;
-    let all: Vec<serde_json::Value> = tiddlers.all()?.iter().map(|t| t.as_value()).collect();
+    let all: Vec<serde_json::Value> = tiddlers.all()?.iter().map(|t| t.as_skinny_value()).collect();
     Ok(axum::Json(all))
 }
 
@@ -289,6 +289,18 @@ impl Tiddler {
         // numbers.
         meta["revision"] = Value::String(self.revision.to_string());
         meta
+    }
+
+    /// Serialize the Tiddler as JSON, removing the `text` field (used to
+    /// efficiently get a list of tiddlers to the web frontend).
+    pub(crate) fn as_skinny_value(&self) -> Value {
+        let meta = self.as_value();
+        if let Value::Object(mut map) = meta {
+            map.remove("text");
+            Value::Object(map)
+        } else {
+            meta
+        }
     }
 
     pub(crate) fn from_value(value: Value) -> AppResult<Tiddler> {
