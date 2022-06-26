@@ -11,8 +11,6 @@
 //! [SQLite]: https://sqlite.org/index.html
 
 
-// TODO: document
-
 use axum::{
     error_handling::HandleError,
     extract,
