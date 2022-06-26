@@ -1,12 +1,23 @@
-// NOTE(nknight): This is the API I'm trying to conform to: https://tiddlywiki.com/#WebServer%20API
-// TODO: serve static files: https://tiddlywiki.com/#WebServer%20API%3A%20Get%20File
-// TODO: take host & port as arguments
+//! # TiddlyWiki Server
+//! 
+//! This is a web backend for [TiddlyWiki]. It uses TiddlyWiki's [web server
+//! API] to save tiddlers in a [SQLite database]. It should come  with a
+//! slightly altered empty TiddlyWiki that includes an extra tiddler store (for
+//! saved tiddlers) and  the `$:/plugins/tiddlywiki/tiddlyweb` plugin (which is
+//! necessary to make use of the web backend).
+//! 
+//! [TiddlyWiki]: https://tiddlywiki.com/
+//! [web server API]: https://tiddlywiki.com/#WebServer
+//! [SQLite]: https://sqlite.org/index.html
+
+
 // TODO: document
 
 use axum::{
+    error_handling::HandleError,
     extract,
     http::StatusCode,
-    routing::{delete, get, put},
+    routing::{delete, get, put, on_service, MethodFilter},
     Extension, Router,
 };
 use serde::Serialize;
@@ -15,17 +26,24 @@ use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
+use tower_http::services::ServeDir;
 
 type DataStore = Arc<Mutex<Tiddlers>>;
 
 #[tokio::main]
 async fn main() {
+    // TODO: Instrument handlers & DB code.
     tracing_subscriber::fmt::init();
 
+    // TODO: make this configurable at runtime
     let addr = SocketAddr::from(([127, 0, 0, 1], 3032));
     println!("listening on {}", addr);
 
     let datastore = initialize_datastore().expect("Error initializing datastore");
+
+    // This services handles the [Get File](https://tiddlywiki.com/#WebServer%20API%3A%20Get%20File)
+    // API endpoint.
+    let files_service = HandleError::new(ServeDir::new("./files/"), handle_io_error);
 
     let app = Router::new()
         .route("/", get(render_wiki))
@@ -38,6 +56,7 @@ async fn main() {
         // NOTE(nknight): For some reason both the 'default' and 'efault' versions of this URL get hit.
         .route("/bags/default/tiddlers/:title", delete(delete_tiddler))
         .route("/bags/efault/tiddlers/:title", delete(delete_tiddler))
+        .nest("/files/", on_service(MethodFilter::GET, files_service))
         .layer(Extension(datastore));
 
     axum::Server::bind(&addr)
@@ -46,6 +65,7 @@ async fn main() {
         .expect("Error running server");
 }
 
+/// Connect to the database and run the database initialization script.
 fn initialize_datastore() -> AppResult<DataStore> {
     let init_script = include_str!("./init.sql");
     let cxn = rusqlite::Connection::open("./tiddlers.sqlite3").map_err(AppError::from)?;
@@ -57,15 +77,17 @@ fn initialize_datastore() -> AppResult<DataStore> {
 // -----------------------------------------------------------------------------------
 // Views
 
+///  Render the wiki as HTML, including the core modules and plugins.
+/// 
+/// Serves the [Get TiddWiki](https://tiddlywiki.com/#WebServer%20API%3A%20Get%20Wiki)
+/// API endpoint.
 async fn render_wiki(
     Extension(ds): Extension<DataStore>,
 ) -> AppResult<axum::response::Html<String>> {
-    // TODO: Stream the response body with https://docs.rs/axum/latest/axum/body/struct.StreamBody.html
+    // TODO(nknight): Stream the response body instead of loading it into memory
 
     let mut ds_lock = ds.lock().expect("failed to lock tiddlers");
     let datastore = &mut *ds_lock;
-    // let mut template_lock = shared_template.lock().expect("failed to lock tiddlers");
-    // let template = &mut *template_lock;
 
     const TARGET_STR: &str =
         "@@TIDDLY-WIKI-SERVER-EXTRA-TIDDLERS-@@N41yzvgnloEcoiY0so8e2dlri4cbYopzw7D5K4XRO9I@@";
@@ -90,6 +112,9 @@ async fn render_wiki(
     Ok(axum::response::Html(body))
 }
 
+/// Return a list of all stored tiddlers excluding the "text" field.
+///
+/// Corresponds to te [](https://tiddlywiki.com/#WebServer%20API%3A%20Get%20All%20Tiddlers).
 async fn all_tiddlers(
     Extension(ds): Extension<DataStore>,
 ) -> AppResult<axum::Json<Vec<serde_json::Value>>> {
@@ -99,6 +124,10 @@ async fn all_tiddlers(
     Ok(axum::Json(all))
 }
 
+/// Retrieve a single tiddler by title.
+///
+/// Serves the [Get Tiddler](https://tiddlywiki.com/#WebServer%20API%3A%20Get%20Tiddler)
+/// API endpoint.
 async fn get_tiddler(
     Extension(ds): Extension<DataStore>,
     extract::Path(title): extract::Path<String>,
@@ -125,6 +154,10 @@ async fn get_tiddler(
     }
 }
 
+/// Delete a tiddler by title.
+///
+/// Serves the [Delete Tiddler](https://tiddlywiki.com/#WebServer%20API%3A%20Delete%20Tiddler).
+/// API endpoint.
 async fn delete_tiddler(
     Extension(ds): Extension<DataStore>,
     extract::Path(title): extract::Path<String>,
@@ -138,6 +171,10 @@ async fn delete_tiddler(
     Ok(resp)
 }
 
+/// Create or update a single Tiddler.
+/// 
+/// Serves the [Put Tiddler](https://tiddlywiki.com/#WebServer%20API%3A%20Put%20Tiddler)
+/// API endpoint.
 async fn put_tiddler(
     Extension(ds): Extension<DataStore>,
     extract::Json(v): extract::Json<serde_json::Value>,
@@ -159,6 +196,7 @@ async fn put_tiddler(
         .body(String::new())
         .map_err(|e| AppError::Response(format!("Error building response: {}", e)))
 }
+
 
 // -----------------------------------------------------------------------------------
 // Models and serialization/parsing
@@ -312,6 +350,7 @@ struct Space {
     recipe: &'static str,
 }
 
+// TODO(nknight): Make this configurable (or support the features it describes).
 const STATUS: Status = Status {
     username: "nknight",
     anonymous: false,
@@ -320,6 +359,10 @@ const STATUS: Status = Status {
     tiddlywiki_version: "5.2.2",
 };
 
+/// Return the server status as JSON.
+/// 
+/// Serves the [Get Server Stats](https://tiddlywiki.com/#WebServer%20API%3A%20Get%20Server%20Status)
+/// API endpoint.
 async fn status() -> axum::Json<Status> {
     axum::Json(STATUS)
 }
@@ -354,4 +397,11 @@ impl From<rusqlite::Error> for AppError {
         let msg = err.to_string();
         AppError::Database(msg)
     }
+}
+
+async fn handle_io_error(err: std::io::Error) -> (StatusCode, String) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("Internal Server Error: {}", err),
+    )
 }
