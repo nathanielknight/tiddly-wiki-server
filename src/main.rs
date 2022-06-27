@@ -21,7 +21,6 @@ use axum::{
 use serde::Serialize;
 use serde_json::Value;
 use std::{
-    net::SocketAddr,
     sync::{Arc, Mutex},
 };
 use tower_http::services::ServeDir;
@@ -33,9 +32,6 @@ async fn main() {
     // TODO: Instrument handlers & DB code.
     tracing_subscriber::fmt::init();
 
-    // TODO: make this configurable at runtime
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3032));
-    println!("listening on {}", addr);
 
     let datastore = initialize_datastore().expect("Error initializing datastore");
 
@@ -57,6 +53,9 @@ async fn main() {
         .nest("/files/", on_service(MethodFilter::GET, files_service))
         .layer(Extension(datastore));
 
+    let addr = listen_addr();
+    println!("listening on {}", addr);
+
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await
@@ -70,6 +69,19 @@ fn initialize_datastore() -> AppResult<DataStore> {
     cxn.execute_batch(init_script).map_err(AppError::from)?;
     let tiddlers = Tiddlers { cxn };
     Ok(Arc::new(Mutex::new(tiddlers)))
+}
+
+/// Determine the network port to bind from the CLI (or use 127.0.0.1:3032 by
+/// default).
+fn listen_addr() -> std::net::SocketAddr {
+    // TODO(nknight): Replace this with a propper CLI using something like seahorse
+    use std::net::SocketAddr;
+    use std::env::args;
+
+    if let Some(src) = args().nth(1) {
+        src.parse::<SocketAddr>().expect(&format!("Couldn't parse a socket from {}", src))
+    } else {
+        SocketAddr::from(([127, 0, 0, 1], 3032))    }
 }
 
 // -----------------------------------------------------------------------------------
