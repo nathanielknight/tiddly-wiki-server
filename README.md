@@ -1,7 +1,7 @@
 # Tiddlywiki Server
 
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](code_of_conduct.md) 
-[![Matrix](https://img.shields.io/matrix/tws:conduit.nathanielknight.ca)](https://matrix.to/#/#tws:conduit.nathanielknight.ca)
+[![Matrix](https://img.shields.io/matrix/tws:conduit.nathanielknight.ca)](https://matrix.to/#/#tws:conduit.nathanielknight.ca) [![Join the chat at https://gitter.im/tiddly-wiki-server/community](https://badges.gitter.im/tiddly-wiki-server/community.svg)](https://gitter.im/tiddly-wiki-server/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 This is a web backend for [TiddlyWiki]. It uses TiddlyWiki's [web server
 API] to save tiddlers in a [SQLite database]. It should come  with a
