@@ -1,10 +1,10 @@
 //! # TiddlyWiki Server
 //! 
-//! This is a web backend for [TiddlyWiki]. It uses TiddlyWiki's [web server
+//! This is a web server for [TiddlyWiki]. It uses TiddlyWiki's [web server
 //! API] to save tiddlers in a [SQLite database]. It should come  with a
 //! slightly altered empty TiddlyWiki that includes an extra tiddler store (for
 //! saved tiddlers) and  the `$:/plugins/tiddlywiki/tiddlyweb` plugin (which is
-//! necessary to make use of the web backend).
+//! necessary to make use of the web server).
 //! 
 //! [TiddlyWiki]: https://tiddlywiki.com/
 //! [web server API]: https://tiddlywiki.com/#WebServer
