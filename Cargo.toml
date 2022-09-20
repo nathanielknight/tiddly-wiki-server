@@ -2,7 +2,7 @@
 name = "tiddly-wiki-server"
 description = "A back-end for saving TiddlyWikis"
 repository = "https://github.com/nathanielknight/tiddly-wiki-server"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license-file = "LICENSE.md"
 readme = "README.md"
