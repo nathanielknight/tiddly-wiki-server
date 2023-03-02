@@ -1,7 +1,6 @@
 # TiddlyWiki Server
 
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](code_of_conduct.md) 
-[![Matrix](https://img.shields.io/matrix/tws:conduit.nathanielknight.ca)](https://matrix.to/#/#tws:conduit.nathanielknight.ca)
 [![Join the chat at https://gitter.im/tiddly-wiki-server/community](https://badges.gitter.im/tiddly-wiki-server/community.svg)](https://gitter.im/tiddly-wiki-server/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 This is a web server for [TiddlyWiki]. It uses TiddlyWiki's [web server
@@ -23,7 +22,7 @@ memory to start, and can easily consume 100 MB or more. This is fine for running
 on a workstation, but a cheap VPS quickly gets crowded running services of this
 size.
 
-[NodeJS based webserver]: https://tiddlywiki.com/static/WebServer.html
+[NodeJS based web server]: https://tiddlywiki.com/static/WebServer.html
 
 In rudimentary benchmarks it looks like `tiddly-wiki-server` uses about 10 MB of
 memory (with no optimizations), which I find much more manageable.
