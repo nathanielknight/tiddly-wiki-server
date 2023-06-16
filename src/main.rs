@@ -1,28 +1,25 @@
 //! # TiddlyWiki Server
-//! 
+//!
 //! This is a web server for [TiddlyWiki]. It uses TiddlyWiki's [web server
 //! API] to save tiddlers in a [SQLite database]. It should come  with a
 //! slightly altered empty TiddlyWiki that includes an extra tiddler store (for
 //! saved tiddlers) and  the `$:/plugins/tiddlywiki/tiddlyweb` plugin (which is
 //! necessary to make use of the web server).
-//! 
+//!
 //! [TiddlyWiki]: https://tiddlywiki.com/
 //! [web server API]: https://tiddlywiki.com/#WebServer
 //! [SQLite]: https://sqlite.org/index.html
-
 
 use axum::{
     error_handling::HandleError,
     extract,
     http::StatusCode,
-    routing::{delete, get, put, on_service, MethodFilter},
+    routing::{delete, get, get_service, put},
     Extension, Router,
 };
 use serde::Serialize;
 use serde_json::Value;
-use std::{
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 use tower_http::services::ServeDir;
 
 type DataStore = Arc<Mutex<Tiddlers>>;
@@ -50,7 +47,7 @@ async fn main() {
         // NOTE(nknight): For some reason both the 'default' and 'efault' versions of this URL get hit.
         .route("/bags/default/tiddlers/:title", delete(delete_tiddler))
         .route("/bags/efault/tiddlers/:title", delete(delete_tiddler))
-        .nest("/files/", on_service(MethodFilter::GET, files_service))
+        .route("/files/", get_service(files_service))
         .layer(Extension(datastore));
 
     let addr = listen_addr();
@@ -75,20 +72,22 @@ fn initialize_datastore() -> AppResult<DataStore> {
 /// default).
 fn listen_addr() -> std::net::SocketAddr {
     // TODO(nknight): Replace this with a propper CLI using something like seahorse
-    use std::net::SocketAddr;
     use std::env::args;
+    use std::net::SocketAddr;
 
     if let Some(src) = args().nth(1) {
-        src.parse::<SocketAddr>().expect(&format!("Couldn't parse a socket from {}", src))
+        src.parse::<SocketAddr>()
+            .unwrap_or_else(|_| panic!("Couldn't parse a socket from {}", src))
     } else {
-        SocketAddr::from(([127, 0, 0, 1], 3032))    }
+        SocketAddr::from(([127, 0, 0, 1], 3032))
+    }
 }
 
 // -----------------------------------------------------------------------------------
 // Views
 
 ///  Render the wiki as HTML, including the core modules and plugins.
-/// 
+///
 /// Serves the [Get TiddWiki](https://tiddlywiki.com/#WebServer%20API%3A%20Get%20Wiki)
 /// API endpoint.
 async fn render_wiki(
@@ -130,7 +129,11 @@ async fn all_tiddlers(
 ) -> AppResult<axum::Json<Vec<serde_json::Value>>> {
     let mut lock = ds.lock().expect("failed to lock tiddlers");
     let tiddlers = &mut *lock;
-    let all: Vec<serde_json::Value> = tiddlers.all()?.iter().map(|t| t.as_skinny_value()).collect();
+    let all: Vec<serde_json::Value> = tiddlers
+        .all()?
+        .iter()
+        .map(|t| t.as_skinny_value())
+        .collect();
     Ok(axum::Json(all))
 }
 
@@ -182,13 +185,13 @@ async fn delete_tiddler(
 }
 
 /// Create or update a single Tiddler.
-/// 
+///
 /// Serves the [Put Tiddler](https://tiddlywiki.com/#WebServer%20API%3A%20Put%20Tiddler)
 /// API endpoint.
 async fn put_tiddler(
     Extension(ds): Extension<DataStore>,
-    extract::Json(v): extract::Json<serde_json::Value>,
     extract::Path(title): extract::Path<String>,
+    extract::Json(v): extract::Json<serde_json::Value>,
 ) -> AppResult<axum::http::Response<String>> {
     use axum::http::response::Response;
     let mut new_tiddler = Tiddler::from_value(v)?;
@@ -206,7 +209,6 @@ async fn put_tiddler(
         .body(String::new())
         .map_err(|e| AppError::Response(format!("Error building response: {}", e)))
 }
-
 
 // -----------------------------------------------------------------------------------
 // Models and serialization/parsing
@@ -382,7 +384,7 @@ const STATUS: Status = Status {
 };
 
 /// Return the server status as JSON.
-/// 
+///
 /// Serves the [Get Server Stats](https://tiddlywiki.com/#WebServer%20API%3A%20Get%20Server%20Status)
 /// API endpoint.
 async fn status() -> axum::Json<Status> {
