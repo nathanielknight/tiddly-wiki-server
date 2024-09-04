@@ -29,7 +29,6 @@ async fn main() {
     // TODO: Instrument handlers & DB code.
     tracing_subscriber::fmt::init();
 
-
     let datastore = initialize_datastore().expect("Error initializing datastore");
 
     // This services handles the [Get File](https://tiddlywiki.com/#WebServer%20API%3A%20Get%20File)
@@ -62,7 +61,7 @@ async fn main() {
 /// Connect to the database and run the database initialization script.
 fn initialize_datastore() -> AppResult<DataStore> {
     let init_script = include_str!("./init.sql");
-    let cxn = rusqlite::Connection::open("./tiddlers.sqlite3").map_err(AppError::from)?;
+    let cxn = rusqlite::Connection::open("./data/tiddlers.sqlite3").map_err(AppError::from)?;
     cxn.execute_batch(init_script).map_err(AppError::from)?;
     let tiddlers = Tiddlers { cxn };
     Ok(Arc::new(Mutex::new(tiddlers)))
@@ -79,7 +78,7 @@ fn listen_addr() -> std::net::SocketAddr {
         src.parse::<SocketAddr>()
             .unwrap_or_else(|_| panic!("Couldn't parse a socket from {}", src))
     } else {
-        SocketAddr::from(([127, 0, 0, 1], 3032))
+        SocketAddr::from(([0, 0, 0, 0], 3032))
     }
 }
 

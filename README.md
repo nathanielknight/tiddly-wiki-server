@@ -40,6 +40,18 @@ To create a TiddlyWiki backed by this server:
 1. Run `tiddly-wiki-server`.
 
 
+## Docker Setup
+
+To run in Docker:
+
+```sh
+docker run --rm -p 3032:3032 -v "$(pwd)/data:/srv/data" $(docker build -q .)
+```
+
+This will use the same port and data directory (namely, `./data`) as `cargo run`.
+
+
+
 ## Differences from TiddlyWiki
 
 The initial page that this project serves has a few changes compared to the
