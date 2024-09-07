@@ -17,23 +17,47 @@ use axum::{
     routing::{delete, get, get_service, put},
     Extension, Router,
 };
-use serde::Serialize;
+use clap::Parser;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 use tower_http::services::ServeDir;
 
 type DataStore = Arc<Mutex<Tiddlers>>;
+
+#[derive(Deserialize, Parser, Debug, Clone)]
+#[command(about, version)]
+struct AppConfig {
+    /// Path of the SQLite databse to connect to.
+    #[clap(env = "TWS_DBPATH", short, long, default_value = "./data/tiddlers.sqlite3")]
+    dbpath: PathBuf,
+    /// Local IP Address to serve on (use 0.0.0.0 for all)
+    #[clap(env = "TWS_BIND", short, long, default_value = "127.0.0.1")]
+    bind: IpAddr,
+    /// Port to bind
+    #[clap(env = "TWS_PORT", short, long, default_value = "3032")]
+    port: u16,
+    /// Directory to serve at /files
+    #[clap(env = "TWS_FILESDIR", short, long, default_value = "./files/")]
+    filesdir: PathBuf,
+}
 
 #[tokio::main]
 async fn main() {
     // TODO: Instrument handlers & DB code.
     tracing_subscriber::fmt::init();
 
-    let datastore = initialize_datastore().expect("Error initializing datastore");
+    let config = AppConfig::parse();
 
+    let datastore = initialize_datastore(&config).expect("Error initializing datastore");
+    let addr = SocketAddr::from((config.bind, config.port));
     // This services handles the [Get File](https://tiddlywiki.com/#WebServer%20API%3A%20Get%20File)
     // API endpoint.
-    let files_service = HandleError::new(ServeDir::new("./files/"), handle_io_error);
+    let files_service = HandleError::new(ServeDir::new(&config.filesdir), handle_io_error);
 
     let app = Router::new()
         .route("/", get(render_wiki))
@@ -49,7 +73,6 @@ async fn main() {
         .route("/files/", get_service(files_service))
         .layer(Extension(datastore));
 
-    let addr = listen_addr();
     println!("listening on {}", addr);
 
     axum::Server::bind(&addr)
@@ -59,27 +82,12 @@ async fn main() {
 }
 
 /// Connect to the database and run the database initialization script.
-fn initialize_datastore() -> AppResult<DataStore> {
+fn initialize_datastore(config: &AppConfig) -> AppResult<DataStore> {
     let init_script = include_str!("./init.sql");
-    let cxn = rusqlite::Connection::open("./data/tiddlers.sqlite3").map_err(AppError::from)?;
+    let cxn = rusqlite::Connection::open(&config.dbpath).map_err(AppError::from)?;
     cxn.execute_batch(init_script).map_err(AppError::from)?;
     let tiddlers = Tiddlers { cxn };
     Ok(Arc::new(Mutex::new(tiddlers)))
-}
-
-/// Determine the network port to bind from the CLI (or use 127.0.0.1:3032 by
-/// default).
-fn listen_addr() -> std::net::SocketAddr {
-    // TODO(nknight): Replace this with a propper CLI using something like seahorse
-    use std::env::args;
-    use std::net::SocketAddr;
-
-    if let Some(src) = args().nth(1) {
-        src.parse::<SocketAddr>()
-            .unwrap_or_else(|_| panic!("Couldn't parse a socket from {}", src))
-    } else {
-        SocketAddr::from(([0, 0, 0, 0], 3032))
-    }
 }
 
 // -----------------------------------------------------------------------------------
