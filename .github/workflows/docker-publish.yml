@@ -7,7 +7,6 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  SCCACHE_GHA_ENABLED: on
 
 jobs:
   build-and-push-image:
