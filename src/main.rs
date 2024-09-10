@@ -11,10 +11,9 @@
 //! [SQLite]: https://sqlite.org/index.html
 
 use axum::{
-    error_handling::HandleError,
     extract,
     http::StatusCode,
-    routing::{delete, get, get_service, put},
+    routing::{delete, get, put},
     Extension, Router,
 };
 use clap::Parser;
@@ -33,7 +32,12 @@ type DataStore = Arc<Mutex<Tiddlers>>;
 #[command(about, version)]
 struct AppConfig {
     /// Path of the SQLite databse to connect to.
-    #[clap(env = "TWS_DBPATH", short, long, default_value = "./data/tiddlers.sqlite3")]
+    #[clap(
+        env = "TWS_DBPATH",
+        short,
+        long,
+        default_value = "./data/tiddlers.sqlite3"
+    )]
     dbpath: PathBuf,
     /// Local IP Address to serve on (use 0.0.0.0 for all)
     #[clap(env = "TWS_BIND", short, long, default_value = "127.0.0.1")]
@@ -57,7 +61,7 @@ async fn main() {
     let addr = SocketAddr::from((config.bind, config.port));
     // This services handles the [Get File](https://tiddlywiki.com/#WebServer%20API%3A%20Get%20File)
     // API endpoint.
-    let files_service = HandleError::new(ServeDir::new(&config.filesdir), handle_io_error);
+    let files_service = ServeDir::new(&config.filesdir);
 
     let app = Router::new()
         .route("/", get(render_wiki))
@@ -70,15 +74,15 @@ async fn main() {
         // NOTE(nknight): For some reason both the 'default' and 'efault' versions of this URL get hit.
         .route("/bags/default/tiddlers/:title", delete(delete_tiddler))
         .route("/bags/efault/tiddlers/:title", delete(delete_tiddler))
-        .route("/files/", get_service(files_service))
+        .route_service("/files/", files_service)
         .layer(Extension(datastore));
 
     println!("listening on {}", addr);
 
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
+    let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .expect("Error running server");
+        .expect("Error binding TCP listener");
+    axum::serve(listener, app).await.expect("Error serving app");
 }
 
 /// Connect to the database and run the database initialization script.
@@ -428,11 +432,4 @@ impl From<rusqlite::Error> for AppError {
         let msg = err.to_string();
         AppError::Database(msg)
     }
-}
-
-async fn handle_io_error(err: std::io::Error) -> (StatusCode, String) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        format!("Internal Server Error: {}", err),
-    )
 }

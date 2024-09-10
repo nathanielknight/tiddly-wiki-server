@@ -9,9 +9,9 @@ readme = "README.md"
 
 
 [dependencies]
-axum = "0.6"
+axum = "0.7"
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
-tower-http = { version = "0.3", default-features = false, features=["fs"] }
+tower-http = { version = "0.5", default-features = false, features=["fs"] }
 anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
