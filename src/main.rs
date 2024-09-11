@@ -101,35 +101,32 @@ fn initialize_datastore(config: &AppConfig) -> AppResult<DataStore> {
 ///
 /// Serves the [Get TiddWiki](https://tiddlywiki.com/#WebServer%20API%3A%20Get%20Wiki)
 /// API endpoint.
-async fn render_wiki(
-    Extension(ds): Extension<DataStore>,
-) -> AppResult<axum::response::Html<String>> {
-    // TODO(nknight): Stream the response body instead of loading it into memory
+async fn render_wiki(Extension(ds): Extension<DataStore>) -> AppResult<axum::response::Response> {
+    use axum::response::Response;
 
     let mut ds_lock = ds.lock().expect("failed to lock tiddlers");
     let datastore = &mut *ds_lock;
 
-    const TARGET_STR: &str =
-        "@@TIDDLY-WIKI-SERVER-EXTRA-TIDDLERS-@@N41yzvgnloEcoiY0so8e2dlri4cbYopzw7D5K4XRO9I@@";
-
-    let template = {
-        use std::io::Read;
-        let mut buffer = String::new();
-        let mut templatefile = std::fs::File::open("./empty.html.template")
-            .expect("Couldn't open tiddlywiki template");
-        templatefile
-            .read_to_string(&mut buffer)
-            .expect("Couldn't read tiddlywiki template");
-        buffer
-    };
+    const TW_SEGMENT_1: &[u8] = include_bytes!("./tw_segment_1");
+    const TW_SEGMENT_2: &[u8] = include_bytes!("./tw_segment_2");
 
     let tiddlers: Vec<Tiddler> = datastore.all()?;
     let json_tiddlers = serde_json::to_string(&tiddlers)
         .map_err(|e| AppError::Serialization(format!("error serializing tiddlers: {}", e)))?;
 
-    let body = template.replace(TARGET_STR, &json_tiddlers);
+    let content_length = TW_SEGMENT_1.len() + TW_SEGMENT_2.len() + json_tiddlers.len();
 
-    Ok(axum::response::Html(body))
+    let mut buffer: Vec<u8> = Vec::with_capacity(content_length);
+    buffer.extend(TW_SEGMENT_1);
+    buffer.extend(json_tiddlers.as_bytes());
+    buffer.extend(TW_SEGMENT_2);
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/html")
+        .header("Content-Length", content_length)
+        .body(axum::body::Body::from(buffer))
+        .map_err(|e| AppError::Response(format!("error building wiki: {}", e)))
 }
 
 /// Return a list of all stored tiddlers excluding the "text" field.
