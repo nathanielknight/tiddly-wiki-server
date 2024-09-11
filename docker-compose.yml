@@ -1,0 +1,12 @@
+volumes:
+  tiddlers:
+
+services:
+  tiddly-wiki-server:
+    image: ghcr.io/nathanielknight/tiddly-wiki-server:latest
+    environment:
+      TWS_PORT: 3032
+    ports:
+      - 3032:3032
+    volumes:
+      - tiddlers:/srv/data
