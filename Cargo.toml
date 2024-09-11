@@ -1,6 +1,6 @@
 [package]
 name = "tiddly-wiki-server"
-description = "An efficient web server for TiddlyWikis."
+description = "An efficient, low-maintenance web server for TiddlyWikis."
 repository = "https://github.com/nathanielknight/tiddly-wiki-server"
 version = "0.3.0-alpha"
 edition = "2021"
