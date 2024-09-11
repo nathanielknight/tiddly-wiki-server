@@ -19,4 +19,9 @@ COPY ./empty.html.template /srv/empty.html.template
 
 WORKDIR /srv/
 EXPOSE 3032
-CMD ["/srv/tiddly-wiki-server"]
+
+# Default server parameters
+ENV TWS_DBPATH="/srv/data/tiddlers.sqlite3"
+ENV TWS_BIND="0.0.0.0"
+
+ENTRYPOINT ["/srv/tiddly-wiki-server"]
