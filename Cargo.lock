@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "tiddly-wiki-server"
-version = "0.3.0-alpha"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",
