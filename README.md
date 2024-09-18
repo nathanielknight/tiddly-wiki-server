@@ -7,7 +7,7 @@ API] provided by the [TiddlyWeb plugin] to save tiddlers in a [SQLite database].
 
 [TiddlyWiki]: https://tiddlywiki.com/
 [web server API]: https://tiddlywiki.com/#WebServer
-[SQLite]: https://sqlite.org/index.html
+[SQLite database]: https://sqlite.org/index.html
 [TiddlyWeb plugin]: https://github.com/Jermolene/TiddlyWiki5/tree/master/plugins/tiddlywiki/tiddlyweb
 
 ## Running the Server
