@@ -9,4 +9,4 @@ services:
     ports:
       - 3032:3032
     volumes:
-      - tiddlers:/srv/data
+      - tiddlers:/data

@@ -12,16 +12,19 @@ COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release
+# Empty dir to COPY --chown as nonroot
+RUN mkdir empty
 
-FROM debian:bookworm-slim
-COPY --from=builder /app/target/release/tiddly-wiki-server /srv/tiddly-wiki-server
-COPY ./empty.html.template /srv/empty.html.template
+FROM gcr.io/distroless/cc-debian12
+COPY --from=builder --chown=nonroot:nonroot /app/target/release/tiddly-wiki-server /srv/tiddly-wiki-server
 
+USER nonroot
+COPY --from=builder --chown=nonroot:nonroot /app/empty /data
+
+# App parameters
 WORKDIR /srv/
 EXPOSE 3032
-
-# Default server parameters
-ENV TWS_DBPATH="/srv/data/tiddlers.sqlite3"
+ENV TWS_DBPATH="/data/tiddlers.sqlite3"
 ENV TWS_BIND="0.0.0.0"
 
 ENTRYPOINT ["/srv/tiddly-wiki-server"]
