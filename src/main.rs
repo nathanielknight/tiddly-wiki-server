@@ -22,8 +22,9 @@ use serde_json::Value;
 use std::{
     net::{IpAddr, SocketAddr},
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
+use tokio::sync::Mutex;
 use tower_http::services::ServeDir;
 
 type DataStore = Arc<Mutex<Tiddlers>>;
@@ -104,7 +105,7 @@ fn initialize_datastore(config: &AppConfig) -> AppResult<DataStore> {
 async fn render_wiki(Extension(ds): Extension<DataStore>) -> AppResult<axum::response::Response> {
     use axum::response::Response;
 
-    let mut ds_lock = ds.lock().expect("failed to lock tiddlers");
+    let mut ds_lock = ds.lock().await;
     let datastore = &mut *ds_lock;
 
     const TW_SEGMENT_1: &[u8] = include_bytes!("./tw_segment_1");
@@ -135,7 +136,7 @@ async fn render_wiki(Extension(ds): Extension<DataStore>) -> AppResult<axum::res
 async fn all_tiddlers(
     Extension(ds): Extension<DataStore>,
 ) -> AppResult<axum::Json<Vec<serde_json::Value>>> {
-    let mut lock = ds.lock().expect("failed to lock tiddlers");
+    let mut lock = ds.lock().await;
     let tiddlers = &mut *lock;
     let all: Vec<serde_json::Value> = tiddlers
         .all()?
@@ -155,7 +156,7 @@ async fn get_tiddler(
 ) -> AppResult<axum::http::Response<String>> {
     use serde_json::ser::to_string_pretty;
 
-    let mut lock = ds.lock().expect("failed to lock tiddlers");
+    let mut lock = ds.lock().await;
     let tiddlers = &mut *lock;
 
     if let Some(t) = tiddlers.get(&title)? {
@@ -183,7 +184,7 @@ async fn delete_tiddler(
     Extension(ds): Extension<DataStore>,
     extract::Path(title): extract::Path<String>,
 ) -> AppResult<axum::response::Response<String>> {
-    let mut lock = ds.lock().expect("failed to lock tiddlers");
+    let mut lock = ds.lock().await;
     let tiddlers = &mut *lock;
     tiddlers.pop(&title)?;
 
@@ -203,7 +204,7 @@ async fn put_tiddler(
 ) -> AppResult<axum::http::Response<String>> {
     use axum::http::response::Response;
     let mut new_tiddler = Tiddler::from_value(v)?;
-    let mut lock = ds.lock().expect("failed to lock tiddlers");
+    let mut lock = ds.lock().await;
     let tiddlers = &mut *lock;
 
     if let Some(_old_tiddler) = tiddlers.pop(&title)? {
